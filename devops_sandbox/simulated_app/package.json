@@ -1,0 +1,12 @@
+{
+  "name": "devops-sandbox-app",
+  "version": "1.0.0",
+  "description": "A simple Express.js backend for the DevOps Sandbox environment",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

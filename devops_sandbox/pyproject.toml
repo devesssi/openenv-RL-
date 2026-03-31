@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devops-troubleshooting-sandbox"
+version = "0.1.0"
+description = "A real-world DevOps environment where an agent must diagnose and fix broken backend configurations inside an isolated Docker container."
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core[core]>=0.2.1",
+    "openai>=1.0.0",
+]
+
+[project.scripts]
+# This line fixes the "Missing [project.scripts]" error
+server = "devops_sandbox.server.app:main"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["devops_sandbox", "devops_sandbox.server"]
+package-dir = { "devops_sandbox" = ".", "devops_sandbox.server" = "server" }
