@@ -7,15 +7,15 @@
 """
 Self-Healing DevOps Sandbox — Environment Implementation.
 
-Spins up an isolated Docker container with a broken Node.js backend.
-The RL agent executes bash commands to diagnose and fix 3 bugs.
-A programmatic grader awards partial credit (0.0 → 1.0) after every step.
+Runs entirely natively on the host filesystem (Hugging Face Spaces compatible).
+The RL agent executes bash commands to diagnose and fix 3 bugs via direct subprocesses.
 """
 
 import logging
 import os
+import shutil
 import subprocess
-import time
+import sys
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
@@ -33,71 +33,64 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-CONTAINER_NAME_PREFIX = "devops_sandbox_"
-IMAGE_NAME = "devops-sandbox-node:latest"
 EXPECTED_PORT = 3000          # The port the fixed app should listen on
 MAX_STEPS = 50                # Episode budget
 SIMULATED_APP_DIR = Path(__file__).resolve().parent.parent / "simulated_app"
 
-
 class DevOpsSandbox(Environment):
     """
-    RL environment: fix a broken Node.js backend inside a Docker container.
-
-    reset() → build image (if needed) + start container + return initial obs
-    step()  → docker exec the agent's command + run grader → obs + reward
-    close() → tear down container
+    RL environment: fix a broken Node.js backend.
+    No longer uses Docker (Docker-in-Docker is unsupported in HF Spaces).
+    Instead, uses native subprocess.run() in a reset /app/ directory.
     """
 
     SUPPORTS_CONCURRENT_SESSIONS: bool = False
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
     def __init__(self):
         super().__init__()
         self._state = State(episode_id=str(uuid4()), step_count=0)
-        self._container_name: Optional[str] = None
-        self._container_running: bool = False
         self._current_dir: str = "/app"
         self._last_score: float = 0.0
+        
+        # When running on Windows locally, `/app` and `/app_backup` don't exist naturally,
+        # so we will use absolute paths mapped to our repo if they aren't at root.
+        # But for HF Space (Linux), /app will be at root.
+        if sys.platform == "win32":
+            # For Windows local dev, use safe paths inside the workspace
+            workspace = Path(__file__).resolve().parent.parent
+            self._app_dir = str(workspace / ".app_sandbox")
+            self._app_backup_dir = str(SIMULATED_APP_DIR)
+            self._tmp_dir = str(workspace / ".tmp")
+            os.makedirs(self._tmp_dir, exist_ok=True)
+            self._current_dir = self._app_dir
+        else:
+            # For Hugging Face Spaces (Linux)
+            self._app_dir = "/app"
+            self._app_backup_dir = "/app_backup"
+            self._tmp_dir = "/tmp"
+            self._current_dir = "/app"
 
-    # ------------------------------------------------------------------
-    # reset
-    # ------------------------------------------------------------------
     def reset(
         self,
         seed: Optional[int] = None,
         episode_id: Optional[str] = None,
         **kwargs: Any,
     ) -> TerminalObservation:
-        """Build the Docker image, start the container, return the task prompt."""
-        # Cleanup previous episode
-        self._cleanup_container()
-
-        # New episode
+        """Reset the environment state by copying the backup to the working dir."""
         eid = episode_id or str(uuid4())
         self._state = State(episode_id=eid, step_count=0)
         self._last_score = 0.0
-        self._current_dir = "/app"
+        self._current_dir = self._app_dir
 
-        # Build image (idempotent — Docker caches layers)
-        self._build_image()
-
-        # Start container
-        self._container_name = f"{CONTAINER_NAME_PREFIX}{eid[:8]}"
-        self._start_container()
-
-        # Inject the grader script into the container
+        self._reset_filesystem()
         self._inject_grader_script()
 
         # Gather initial observation
-        init_stdout = self._docker_exec("ls -la /app && echo '---' && cat /app/config.json")
+        init_stdout = self._exec_cmd(f"ls -la {self._app_dir} && echo '---' && cat {os.path.join(self._app_dir, 'config.json')}")
 
         task_prompt = (
             "=== SELF-HEALING DEVOPS SANDBOX ===\n"
-            "You have been dropped into a Docker container with a broken Node.js "
-            "Express backend in /app.\n\n"
+            f"You have been dropped into a container with a broken Node.js Express backend in {self._app_dir}.\n\n"
             "YOUR MISSION: Diagnose and fix ALL bugs so that:\n"
             "  1. The app starts without errors on port 3000\n"
             "  2. GET /health returns HTTP 200\n"
@@ -124,31 +117,15 @@ class DevOpsSandbox(Environment):
             reward=0.0,
         )
 
-    # ------------------------------------------------------------------
-    # step
-    # ------------------------------------------------------------------
     def step(
         self,
         action: BashAction,  # type: ignore[override]
         timeout_s: Optional[float] = None,
         **kwargs: Any,
     ) -> TerminalObservation:
-        """Execute the agent's bash command, run grader, return observation."""
+        """Execute the agent's command natively, run grader, return observation."""
         self._state.step_count += 1
 
-        if not self._container_running:
-            return TerminalObservation(
-                stdout="",
-                stderr="ERROR: Container is not running. Call reset() first.",
-                current_dir=self._current_dir,
-                task_id="devops_sandbox",
-                grader_score=0.0,
-                grader_feedback="Container not running.",
-                done=True,
-                reward=0.0,
-            )
-
-        # Execute the command
         command = action.command.strip()
         if not command:
             return TerminalObservation(
@@ -162,16 +139,49 @@ class DevOpsSandbox(Environment):
                 reward=self._last_score,
             )
 
+        # Handle 'cd' commands manually since subprocess run is transient
+        if command.startswith("cd "):
+            target = command[3:].strip()
+            # Handle standard cd edge cases
+            if target == "" or target == "~":
+                # Assuming /app is home for this exercise
+                new_dir = self._app_dir
+            elif target.startswith("/"):
+                new_dir = os.path.normpath(target)
+            else:
+                new_dir = os.path.normpath(os.path.join(self._current_dir, target))
+            
+            if os.path.isdir(new_dir):
+                self._current_dir = new_dir
+                stdout, stderr = "", ""
+            else:
+                stdout, stderr = "", f"bash: cd: {target}: No such file or directory"
+                
+            # Run the grader anyway, even if just a cd
+            score, feedback = self._grade()
+            self._last_score = score
+            episode_done = (score >= 1.0) or (self._state.step_count >= MAX_STEPS)
+
+            return TerminalObservation(
+                stdout=stdout,
+                stderr=stderr,
+                current_dir=self._current_dir,
+                task_id="devops_sandbox",
+                grader_score=score,
+                grader_feedback=feedback,
+                done=episode_done,
+                reward=score,
+            )
+
+        # Execute normal command
         try:
             timeout = timeout_s or 30.0
-            stdout, stderr = self._docker_exec_split(command, timeout=timeout)
+            stdout, stderr = self._exec_cmd_split(command, timeout=timeout)
         except Exception as e:
             stdout, stderr = "", f"Command execution error: {e}"
 
-        # Run the grader
         score, feedback = self._grade()
         self._last_score = score
-
         episode_done = (score >= 1.0) or (self._state.step_count >= MAX_STEPS)
 
         return TerminalObservation(
@@ -185,29 +195,71 @@ class DevOpsSandbox(Environment):
             reward=score,
         )
 
-    # ------------------------------------------------------------------
-    # state
-    # ------------------------------------------------------------------
     @property
     def state(self) -> State:
         return self._state
 
-    # ------------------------------------------------------------------
-    # close
-    # ------------------------------------------------------------------
     def close(self) -> None:
-        self._cleanup_container()
+        # pkill node servers that we might have spawned during the session
+        self._exec_cmd("pkill -f 'node server.js'")
 
     # ==================================================================
-    #  GRADER — partial reward (0.0 → 1.0)
-    #  The grader script is injected as a file into the container at
-    #  reset() time, then executed via `bash /tmp/grader.sh` to avoid
-    #  Windows subprocess escaping issues with complex bash scripts.
+    #  FILESYSTEM & EXECUTION HELPERS
+    # ==================================================================
+    def _reset_filesystem(self) -> None:
+        """Replace the current working /app with the pristine /app_backup."""
+        # Ensure we don't accidentally wipe out the whole host on windows if paths are wrong
+        if os.path.exists(self._app_dir):
+            shutil.rmtree(self._app_dir, ignore_errors=True)
+            
+        os.makedirs(self._app_dir, exist_ok=True)
+        
+        # Copy from backup to app dir
+        if os.path.exists(self._app_backup_dir):
+            for item in os.listdir(self._app_backup_dir):
+                s = os.path.join(self._app_backup_dir, item)
+                d = os.path.join(self._app_dir, item)
+                if os.path.isdir(s):
+                    shutil.copytree(s, d, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(s, d)
+        else:
+            logger.warning(f"Backup directory {self._app_backup_dir} not found. Ensure Dockerfile copied simulated_app here.")
+
+    def _exec_cmd(self, cmd: str, timeout: float = 30.0) -> str:
+        """Execute command natively; return combined output."""
+        stdout, stderr = self._exec_cmd_split(cmd, timeout)
+        return (stdout + "\n" + stderr).strip()
+
+    def _exec_cmd_split(self, cmd: str, timeout: float = 30.0) -> tuple:
+        """Execute command natively; return (stdout, stderr)."""
+        kwargs = {
+            "cwd": self._current_dir,
+            "shell": True,
+            "capture_output": True,
+            "timeout": timeout,
+        }
+        
+        # Hugging Face space requires POSIX bash, windows uses powershell/cmd
+        if sys.platform != "win32":
+            kwargs["executable"] = "/bin/bash"
+
+        try:
+            result = subprocess.run(cmd, **kwargs)
+            return (
+                result.stdout.decode(errors="replace"),
+                result.stderr.decode(errors="replace"),
+            )
+        except subprocess.TimeoutExpired:
+            return ("", "[command timed out]")
+        except Exception as e:
+            return ("", f"[exec error: {e}]")
+
+    # ==================================================================
+    #  GRADER
     # ==================================================================
     def _inject_grader_script(self) -> None:
-        """Write the grader bash script into the container as /tmp/grader.sh."""
-        # Use a heredoc via docker exec to write the file
-        # We write it line-by-line to avoid any escaping issues
+        self.grader_path = os.path.join(self._tmp_dir, "grader.sh")
         lines = [
             '#!/bin/bash',
             'set -m',
@@ -215,8 +267,8 @@ class DevOpsSandbox(Environment):
             'pkill -f "node server.js" 2>/dev/null',
             'sleep 0.5',
             '',
-            'cd /app',
-            'node server.js > /tmp/node.log 2>&1 &',
+            f'cd {self._app_dir}',
+            f'node server.js > {self._tmp_dir}/node.log 2>&1 &',
             'NODE_PID=$!',
             '',
             'for i in 1 2 3 4; do',
@@ -226,13 +278,13 @@ class DevOpsSandbox(Environment):
             '  fi',
             'done',
             '',
-            'STARTUP_LOG=$(cat /tmp/node.log 2>/dev/null)',
+            f'STARTUP_LOG=$(cat {self._tmp_dir}/node.log 2>/dev/null)',
             '',
-            "HEALTH_CODE=$(curl -s -o /tmp/health.json -w '%{http_code}' http://localhost:3000/health 2>/dev/null)",
-            "USERS_CODE=$(curl -s -o /tmp/users.json -w '%{http_code}' http://localhost:3000/api/users 2>/dev/null)",
-            "DATA_CODE=$(curl -s -o /tmp/data.json -w '%{http_code}' http://localhost:3000/api/data 2>/dev/null)",
-            'USERS_BODY=$(cat /tmp/users.json 2>/dev/null)',
-            'DATA_BODY=$(cat /tmp/data.json 2>/dev/null)',
+            f"HEALTH_CODE=$(curl -s -o {self._tmp_dir}/health.json -w '%{{http_code}}' http://localhost:3000/health 2>/dev/null)",
+            f"USERS_CODE=$(curl -s -o {self._tmp_dir}/users.json -w '%{{http_code}}' http://localhost:3000/api/users 2>/dev/null)",
+            f"DATA_CODE=$(curl -s -o {self._tmp_dir}/data.json -w '%{{http_code}}' http://localhost:3000/api/data 2>/dev/null)",
+            f'USERS_BODY=$(cat {self._tmp_dir}/users.json 2>/dev/null)',
+            f'DATA_BODY=$(cat {self._tmp_dir}/data.json 2>/dev/null)',
             '',
             'kill $NODE_PID 2>/dev/null',
             'wait $NODE_PID 2>/dev/null',
@@ -244,39 +296,26 @@ class DevOpsSandbox(Environment):
             'echo "GRADER_USERS_BODY:${USERS_BODY}"',
             'echo "GRADER_DATA_BODY:${DATA_BODY}"',
         ]
+        
         script_content = '\n'.join(lines) + '\n'
-
-        # Write via docker cp using a temp file on the host
-        import tempfile
-        with tempfile.NamedTemporaryFile(
-            mode='w', suffix='.sh', delete=False, newline='\n'
-        ) as f:
+        with open(self.grader_path, "w", newline='\n') as f:
             f.write(script_content)
-            tmp_path = f.name
-
-        try:
-            subprocess.run(
-                ["docker", "cp", tmp_path, f"{self._container_name}:/tmp/grader.sh"],
-                check=True,
-                capture_output=True,
-                timeout=10,
-            )
-            self._docker_exec("chmod +x /tmp/grader.sh")
-        finally:
-            os.unlink(tmp_path)
+            
+        if sys.platform != "win32":
+            subprocess.run(["chmod", "+x", self.grader_path])
 
     def _grade(self) -> tuple:
-        """
-        Run the grader script inside the container.
-        Returns (score: float, feedback: str).
-        """
         score = 0.0
         feedback_parts = []
 
         try:
-            raw = self._docker_exec("bash /tmp/grader.sh", timeout=20.0)
+            if sys.platform == "win32":
+                # We use bash via wsl or bash.exe on Windows if we can, 
+                # but if not we might fail grading natively on Windows unless Git Bash is installed.
+                raw = self._exec_cmd(f"bash {self.grader_path}", timeout=20.0)
+            else:
+                raw = self._exec_cmd(f"/bin/bash {self.grader_path}", timeout=20.0)
 
-            # Parse structured output
             results = {}
             for line in raw.splitlines():
                 if line.startswith("GRADER_"):
@@ -290,7 +329,6 @@ class DevOpsSandbox(Environment):
             users_body = results.get("GRADER_USERS_BODY", "")
             data_body = results.get("GRADER_DATA_BODY", "")
 
-            # --- Check 1: App starts on correct port ---
             has_syntax_error = "SyntaxError" in startup_log
             has_crash = (has_syntax_error
                          or "Cannot find module" in startup_log
@@ -310,14 +348,12 @@ class DevOpsSandbox(Environment):
                 feedback_parts.append("✗ App not listening on port 3000")
                 return (score, " | ".join(feedback_parts))
 
-            # --- Check 2: /health ---
             if health_code == "200":
                 score += 0.10
                 feedback_parts.append("✓ /health returns 200 (+0.10)")
             else:
                 feedback_parts.append(f"✗ /health returned {health_code}")
 
-            # --- Check 3: /api/users ---
             if users_code == "200":
                 if '"users"' in users_body:
                     score += 0.15
@@ -328,7 +364,6 @@ class DevOpsSandbox(Environment):
             else:
                 feedback_parts.append(f"✗ /api/users returned {users_code}")
 
-            # --- Check 4: /api/data ---
             if data_code == "200":
                 if '"records"' in data_body:
                     score += 0.25
@@ -339,7 +374,6 @@ class DevOpsSandbox(Environment):
             else:
                 feedback_parts.append(f"✗ /api/data returned {data_code}")
 
-            # --- Check 5: all endpoints correct ---
             if score >= 0.85:
                 score = min(score + 0.15, 1.0)
                 feedback_parts.append("✓ All endpoints healthy — FULL SCORE (+0.15)")
@@ -350,101 +384,3 @@ class DevOpsSandbox(Environment):
 
         score = round(min(max(score, 0.0), 1.0), 2)
         return (score, " | ".join(feedback_parts))
-
-    # ==================================================================
-    #  DOCKER HELPERS
-    # ==================================================================
-    def _build_image(self) -> None:
-        """Build the sandbox Docker image from simulated_app/."""
-        try:
-            logger.info("Building Docker image %s …", IMAGE_NAME)
-            subprocess.run(
-                ["docker", "build", "-t", IMAGE_NAME, "."],
-                cwd=str(SIMULATED_APP_DIR),
-                check=True,
-                capture_output=True,
-                timeout=120,
-            )
-            logger.info("Docker image built successfully.")
-        except subprocess.CalledProcessError as e:
-            logger.error("Docker build failed: %s", e.stderr.decode(errors="replace"))
-            raise RuntimeError(f"Docker build failed: {e.stderr.decode(errors='replace')}") from e
-        except FileNotFoundError:
-            raise RuntimeError(
-                "Docker CLI not found. Ensure Docker is installed and on PATH."
-            )
-
-    def _start_container(self) -> None:
-        """Run the sandbox container in detached mode."""
-        try:
-            # Remove stale container with same name
-            subprocess.run(
-                ["docker", "rm", "-f", self._container_name],
-                capture_output=True,
-                timeout=10,
-            )
-            subprocess.run(
-                [
-                    "docker", "run", "-d",
-                    "--init",
-                    "--name", self._container_name,
-                    IMAGE_NAME,
-                ],
-                check=True,
-                capture_output=True,
-                timeout=30,
-            )
-            self._container_running = True
-            logger.info("Container %s started.", self._container_name)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"Failed to start container: {e.stderr.decode(errors='replace')}"
-            ) from e
-
-    def _docker_exec(self, cmd: str, timeout: float = 30.0) -> str:
-        """Execute a command inside the running container and return combined output."""
-        try:
-            result = subprocess.run(
-                ["docker", "exec", self._container_name, "bash", "-c", cmd],
-                capture_output=True,
-                timeout=timeout,
-            )
-            out = result.stdout.decode(errors="replace")
-            err = result.stderr.decode(errors="replace")
-            return (out + err).strip()
-        except subprocess.TimeoutExpired:
-            return "[command timed out]"
-        except Exception as e:
-            return f"[docker exec error: {e}]"
-
-    def _docker_exec_split(self, cmd: str, timeout: float = 30.0) -> tuple:
-        """Execute command; return (stdout, stderr) separately."""
-        try:
-            result = subprocess.run(
-                ["docker", "exec", self._container_name, "bash", "-c", cmd],
-                capture_output=True,
-                timeout=timeout,
-            )
-            return (
-                result.stdout.decode(errors="replace"),
-                result.stderr.decode(errors="replace"),
-            )
-        except subprocess.TimeoutExpired:
-            return ("", "[command timed out]")
-        except Exception as e:
-            return ("", f"[docker exec error: {e}]")
-
-    def _cleanup_container(self) -> None:
-        """Stop and remove the container if it exists."""
-        if self._container_name:
-            try:
-                subprocess.run(
-                    ["docker", "rm", "-f", self._container_name],
-                    capture_output=True,
-                    timeout=15,
-                )
-                logger.info("Container %s removed.", self._container_name)
-            except Exception:
-                pass
-        self._container_running = False
-        self._container_name = None
