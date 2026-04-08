@@ -434,6 +434,7 @@ class DevOpsSandbox(Environment):
             raw_target = 1.0
             
         final_score = min(1.0, score / raw_target)
-        final_score = round(min(max(final_score, 0.0), 1.0), 2)
+        # Cap strictly within (0, 1) per Phase 2 Validator requirements
+        final_score = round(min(max(final_score, 0.01), 0.99), 2)
         
         return (final_score, " | ".join(feedback_parts))

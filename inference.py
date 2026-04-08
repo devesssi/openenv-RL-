@@ -177,10 +177,10 @@ def main():
                     })
 
                     final_score = getattr(obs, 'grader_score', 0.0)
-                    if getattr(obs, 'grader_score', 0.0) >= 1.0 or getattr(obs, 'done', False) or (hasattr(result, 'done') and result.done):
+                    if getattr(obs, 'grader_score', 0.0) >= 0.99 or getattr(obs, 'done', False) or (hasattr(result, 'done') and result.done):
                         break
 
-                success_str = "true" if final_score >= 1.0 else "false"
+                success_str = "true" if final_score >= 0.99 else "false"
                 rewards_str = ",".join(rewards) if rewards else "0.00"
                 print(f"[END] success={success_str} steps={steps_taken} score={final_score:.2f} rewards={rewards_str}", flush=True)
         except Exception as e:
