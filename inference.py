@@ -185,7 +185,7 @@ def main():
                 print(f"[END] success={success_str} steps={steps_taken} score={final_score:.2f} rewards={rewards_str}", flush=True)
         except Exception as e:
              # Make sure to emit END log even on catastrophic wrapper failures so Hackathon doesn't crash inference.py
-             print(f"[END] success=false steps=0 score=0.00 rewards=0.00", flush=True)
+             print(f"[END] success=false steps=0 score=0.01 rewards=0.01", flush=True)
 
 if __name__ == "__main__":
     main()

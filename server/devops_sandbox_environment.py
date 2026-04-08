@@ -50,7 +50,7 @@ class DevOpsSandbox(Environment):
         super().__init__()
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._current_dir: str = "/app"
-        self._last_score: float = 0.0
+        self._last_score: float = 0.01
         self._current_task: str = "hard"
         
         # When running on Windows locally, `/app` and `/app_backup` don't exist naturally,
@@ -80,7 +80,7 @@ class DevOpsSandbox(Environment):
         """Reset the environment state by copying the backup to the working dir."""
         eid = episode_id or str(uuid4())
         self._state = State(episode_id=eid, step_count=0)
-        self._last_score = 0.0
+        self._last_score = 0.01
         self._current_dir = self._app_dir
         self._current_task = kwargs.get("task_name", "hard")
 
@@ -144,10 +144,10 @@ class DevOpsSandbox(Environment):
             stderr="",
             current_dir=self._current_dir,
             task_id=self._current_task,
-            grader_score=0.0,
+            grader_score=0.01,
             grader_feedback="Episode started. Fix the bugs!",
             done=False,
-            reward=0.0,
+            reward=0.01,
         )
 
     def step(
@@ -169,7 +169,7 @@ class DevOpsSandbox(Environment):
                 grader_score=self._last_score,
                 grader_feedback="No command executed.",
                 done=False,
-                reward=0.0,
+                reward=0.01,
             )
 
         # Handle 'cd' commands manually since subprocess run is transient
@@ -194,7 +194,7 @@ class DevOpsSandbox(Environment):
             score, feedback = self._grade()
             reward = max(0.0, score - self._last_score)
             self._last_score = score
-            episode_done = (score >= 1.0) or (self._state.step_count >= MAX_STEPS)
+            episode_done = (score >= 0.99) or (self._state.step_count >= MAX_STEPS)
 
             return TerminalObservation(
                 stdout=stdout,
@@ -217,7 +217,7 @@ class DevOpsSandbox(Environment):
         score, feedback = self._grade()
         reward = max(0.0, score - self._last_score)
         self._last_score = score
-        episode_done = (score >= 1.0) or (self._state.step_count >= MAX_STEPS)
+        episode_done = (score >= 0.99) or (self._state.step_count >= MAX_STEPS)
 
         return TerminalObservation(
             stdout=stdout,
