@@ -62,8 +62,8 @@ RUN mkdir -p /app_backup && \
 ENV PATH="/server_app/.venv/bin:$PATH"
 ENV PYTHONPATH="/server_app/env:$PYTHONPATH"
 
-# Run the FastAPI server on port 7860 for HuggingFace Spaces
+# Run the FastAPI server on port 8000 for HuggingFace Spaces
 ENV ENABLE_WEB_INTERFACE=true
-EXPOSE 7860
+EXPOSE 8000
 
-CMD ["sh", "-c", "cd /server_app/env && uvicorn server.app:app --host 0.0.0.0 --port 7860"]
+CMD ["sh", "-c", "cd /server_app/env && uvicorn server.app:app --host 0.0.0.0 --port 8000"]
