@@ -209,11 +209,19 @@ class DevOpsSandbox(Environment):
     def _reset_filesystem(self) -> None:
         """Replace the current working /app with the pristine /app_backup."""
         # Ensure we don't accidentally wipe out the whole host on windows if paths are wrong
-        if os.path.exists(self._app_dir):
-            shutil.rmtree(self._app_dir, ignore_errors=True)
-            
         os.makedirs(self._app_dir, exist_ok=True)
         
+        # Clean contents of /app instead of deleting /app itself
+        for item in os.listdir(self._app_dir):
+            item_path = os.path.join(self._app_dir, item)
+            if os.path.isdir(item_path):
+                shutil.rmtree(item_path, ignore_errors=True)
+            else:
+                try:
+                    os.remove(item_path)
+                except OSError:
+                    pass
+            
         # Copy from backup to app dir
         if os.path.exists(self._app_backup_dir):
             for item in os.listdir(self._app_backup_dir):

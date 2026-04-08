@@ -1,0 +1,10 @@
+# Self-Healing DevOps Sandbox - a Hugging Face Space by DEVessi
+
+
+# https://huggingface.co/[Spaces](https://huggingface.co/spaces)https://huggingface.co/[DEVessi](https://huggingface.co/DEVessi) DEVessi / [devops_sandbox](https://huggingface.co/spaces/DEVessi/devops_sandbox) like 0 Building
+[Spaces](https://huggingface.co/spaces)
+[DEVessi](https://huggingface.co/DEVessi)
+[devops_sandbox](https://huggingface.co/spaces/DEVessi/devops_sandbox)
+[App](https://huggingface.co/spaces/DEVessi/devops_sandbox)
+[Files Files](https://huggingface.co/spaces/DEVessi/devops_sandbox/tree/main)
+[Community](https://huggingface.co/spaces/DEVessi/devops_sandbox/discussions)

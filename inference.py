@@ -10,14 +10,6 @@ Baseline inference script for the Self-Healing DevOps Sandbox.
 
 Uses an LLM (via the OpenAI-compatible API) to diagnose and fix a broken
 Node.js backend running inside a Docker container.
-
-Usage:
-    export OPENAI_API_KEY="sk-..."
-    python baseline.py
-
-    # Or with a custom endpoint (e.g., local vLLM):
-    export OPENAI_BASE_URL="http://localhost:8080/v1"
-    python baseline.py
 """
 
 import json
@@ -30,14 +22,20 @@ except ImportError:
     print("ERROR: 'openai' package is required. Install with: pip install openai")
     sys.exit(1)
 
-from devops_sandbox import BashAction, DevopsSandboxEnv
+from client import DevopsSandboxEnv
+from models import BashAction
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
+MODEL_NAME = os.getenv("MODEL_NAME") or "gpt-4o-mini"
+HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+
 ENV_URL = os.getenv("DEVOPS_SANDBOX_URL", "http://localhost:8000")
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-MAX_TURNS = int(os.getenv("MAX_TURNS", "30"))
+TASK_NAME = os.getenv("MY_ENV_V4_TASK", "devops_sandbox")
+BENCHMARK = os.getenv("MY_ENV_V4_BENCHMARK", "devops_sandbox")
+MAX_TURNS = int(os.getenv("MAX_TURNS", "8"))
 
 SYSTEM_PROMPT = """\
 You are an expert DevOps engineer and Node.js developer.
@@ -59,10 +57,8 @@ EXPECTED FINAL STATE:
 - GET /api/data → 200 with JSON containing "records" array
 """
 
-
 def extract_command(llm_response: str) -> str:
     """Extract a bash command from the LLM's response (JSON or raw text)."""
-    # Try JSON parsing first
     try:
         data = json.loads(llm_response.strip())
         if isinstance(data, dict) and "command" in data:
@@ -70,10 +66,9 @@ def extract_command(llm_response: str) -> str:
     except (json.JSONDecodeError, TypeError):
         pass
 
-    # Try extracting from markdown code block
     if "```" in llm_response:
         lines = llm_response.split("```")
-        for block in lines[1::2]:  # odd indices are code blocks
+        for block in lines[1::2]:
             code = block.strip()
             if code.startswith("json"):
                 code = code[4:].strip()
@@ -91,36 +86,29 @@ def extract_command(llm_response: str) -> str:
                 if first_line:
                     return first_line
 
-    # Fallback: treat entire response as a command
     cmd = llm_response.strip().strip("`").strip()
     if cmd.startswith("{"):
-        # One more try
         try:
             return json.loads(cmd)["command"]
         except Exception:
             pass
     return cmd
 
-
 def main():
-    print("=" * 60)
-    print(" Self-Healing DevOps Sandbox — Baseline Agent")
-    print("=" * 60)
+    if not HF_TOKEN:
+        pass # we can let it fail or use empty key depending on endpoint
 
-    client = OpenAI()
+    client = OpenAI(api_key=HF_TOKEN or "dummy_key", base_url=API_BASE_URL)
 
+    # Note: openenv evaluation specifically needs exactly 3 things: [START], [STEP] logs, [END]
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     with DevopsSandboxEnv(base_url=ENV_URL).sync() as env:
-        # Reset the environment
-        print("\n[*] Resetting environment...")
         result = env.reset()
         obs = result.observation
+        
+        print(f"[START] task={TASK_NAME} env={BENCHMARK} model={MODEL_NAME}", flush=True)
 
-        print(f"\n[INIT] Task prompt:\n{obs.stdout[:500]}...")
-        print(f"[INIT] Score: {obs.grader_score} | Feedback: {obs.grader_feedback}")
-
-        # Add initial observation to messages
         messages.append({
             "role": "user",
             "content": (
@@ -132,72 +120,66 @@ def main():
             ),
         })
 
-        for turn in range(1, MAX_TURNS + 1):
-            print(f"\n{'─' * 40}")
-            print(f"Turn {turn}/{MAX_TURNS}")
-            print(f"{'─' * 40}")
+        rewards = []
+        is_done = False
+        steps_taken = 0
+        final_score = 0.0
 
-            # Get LLM response
+        for turn in range(1, MAX_TURNS + 1):
             try:
                 response = client.chat.completions.create(
-                    model=MODEL,
+                    model=MODEL_NAME,
                     messages=messages,
                     temperature=0.2,
                     max_tokens=256,
                 )
                 llm_text = response.choices[0].message.content or ""
             except Exception as e:
-                print(f"[ERROR] LLM call failed: {e}")
+                err_msg = str(e).replace('"', "'")
+                # Need to emit an empty step on failure? Usually not, just end.
                 break
 
-            # Extract command
             command = extract_command(llm_text)
             if not command:
-                print("[WARN] Could not extract command from LLM response")
                 command = "ls -la /app"
 
-            print(f"[CMD] {command}")
+            error_msg = "null"
+            try:
+                result = env.step(BashAction(command=command))
+                obs = result.observation
+            except Exception as e:
+                obs = env.state  # Mock failed obs
+                error_msg = str(e).replace('\n', ' ')
 
-            # Execute in environment
-            result = env.step(BashAction(command=command))
-            obs = result.observation
+            steps_taken += 1
+            reward_val = obs.reward if hasattr(obs, 'reward') else getattr(obs, 'grader_score', 0.0)
+            rewards.append(f"{reward_val:.2f}")
+            is_done = result.done if hasattr(result, 'done') else getattr(obs, 'done', False)
+            done_str = "true" if is_done else "false"
 
-            stdout_preview = obs.stdout[:300] if obs.stdout else "(empty)"
-            stderr_preview = obs.stderr[:200] if obs.stderr else "(none)"
-            print(f"[OUT] {stdout_preview}")
-            if obs.stderr:
-                print(f"[ERR] {stderr_preview}")
-            print(f"[SCORE] {obs.grader_score:.2f} | {obs.grader_feedback}")
+            action_str = command.replace('\n', ' ; ')
+            print(f"[STEP] step={steps_taken} action={action_str} reward={reward_val:.2f} done={done_str} error={error_msg}", flush=True)
 
-            # Add to conversation
             messages.append({"role": "assistant", "content": llm_text})
             messages.append({
                 "role": "user",
                 "content": (
                     f"Command output:\n"
-                    f"stdout:\n```\n{obs.stdout}\n```\n"
-                    f"stderr:\n```\n{obs.stderr}\n```\n"
-                    f"Current score: {obs.grader_score}/1.0\n"
-                    f"Grader feedback: {obs.grader_feedback}\n\n"
+                    f"stdout:\n```\n{getattr(obs, 'stdout', '')}\n```\n"
+                    f"stderr:\n```\n{getattr(obs, 'stderr', '')}\n```\n"
+                    f"Current score: {getattr(obs, 'grader_score', 0.0)}/1.0\n"
+                    f"Grader feedback: {getattr(obs, 'grader_feedback', '')}\n\n"
                     f"What command should I run next?"
                 ),
             })
 
-            # Check if done
-            if result.done:
-                print(f"\n{'=' * 60}")
-                if obs.grader_score >= 1.0:
-                    print(" ✅ ALL BUGS FIXED — PERFECT SCORE!")
-                else:
-                    print(f" Episode ended. Final score: {obs.grader_score:.2f}/1.0")
-                print(f"{'=' * 60}")
+            final_score = getattr(obs, 'grader_score', 0.0)
+            if getattr(obs, 'grader_score', 0.0) >= 1.0 or getattr(obs, 'done', False) or result.done:
                 break
-        else:
-            print(f"\n[!] Max turns ({MAX_TURNS}) reached.")
-            print(f"    Final score: {obs.grader_score:.2f}/1.0")
 
-    print("\n[*] Done.")
-
+        success_str = "true" if final_score >= 1.0 else "false"
+        rewards_str = ",".join(rewards) if rewards else "0.00"
+        print(f"[END] success={success_str} steps={steps_taken} score={final_score:.2f} rewards={rewards_str}", flush=True)
 
 if __name__ == "__main__":
     main()
