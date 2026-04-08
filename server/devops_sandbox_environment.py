@@ -51,6 +51,7 @@ class DevOpsSandbox(Environment):
         self._state = State(episode_id=str(uuid4()), step_count=0)
         self._current_dir: str = "/app"
         self._last_score: float = 0.0
+        self._current_task: str = "hard"
         
         # When running on Windows locally, `/app` and `/app_backup` don't exist naturally,
         # so we will use absolute paths mapped to our repo if they aren't at root.
@@ -81,6 +82,7 @@ class DevOpsSandbox(Environment):
         self._state = State(episode_id=eid, step_count=0)
         self._last_score = 0.0
         self._current_dir = self._app_dir
+        self._current_task = kwargs.get("task_name", "hard")
 
         self._reset_filesystem()
         self._inject_grader_script()
@@ -88,7 +90,38 @@ class DevOpsSandbox(Environment):
         # Gather initial observation
         init_stdout = self._exec_cmd(f"ls -la {self._app_dir} && echo '---' && cat {os.path.join(self._app_dir, 'config.json')}")
 
-        task_prompt = (
+        if self._current_task == "easy":
+            task_prompt = (
+                "=== SELF-HEALING DEVOPS SANDBOX ===\n"
+                f"You have been dropped into a container with a broken Node.js Express backend in {self._app_dir}.\n\n"
+                "YOUR MISSION [EASY]: Diagnose and fix the port bug so that:\n"
+                "  1. The app starts without errors on port 3000\n"
+                "  2. GET /health returns HTTP 200\n\n"
+                "HINTS:\n"
+                "  - Check config.json for wrong settings\n\n"
+                "Use bash commands to explore, edit files, and test.\n"
+                "When you think you've fixed everything, run: npm start\n\n"
+                "--- INITIAL DIRECTORY LISTING ---\n"
+                f"{init_stdout}\n"
+            )
+        elif self._current_task == "medium":
+            task_prompt = (
+                "=== SELF-HEALING DEVOPS SANDBOX ===\n"
+                f"You have been dropped into a container with a broken Node.js Express backend in {self._app_dir}.\n\n"
+                "YOUR MISSION [MEDIUM]: Diagnose and fix TWO bugs so that:\n"
+                "  1. The app starts without errors on port 3000\n"
+                "  2. GET /health returns HTTP 200\n"
+                "  3. GET /api/users returns HTTP 200 with valid JSON\n\n"
+                "HINTS:\n"
+                "  - Check config.json for wrong settings\n"
+                "  - Look for syntax errors in routes/users.js\n\n"
+                "Use bash commands to explore, edit files, and test.\n"
+                "When you think you've fixed everything, run: npm start\n\n"
+                "--- INITIAL DIRECTORY LISTING ---\n"
+                f"{init_stdout}\n"
+            )
+        else:
+            task_prompt = (
             "=== SELF-HEALING DEVOPS SANDBOX ===\n"
             f"You have been dropped into a container with a broken Node.js Express backend in {self._app_dir}.\n\n"
             "YOUR MISSION: Diagnose and fix ALL bugs so that:\n"
@@ -110,7 +143,7 @@ class DevOpsSandbox(Environment):
             stdout=task_prompt,
             stderr="",
             current_dir=self._current_dir,
-            task_id="devops_sandbox",
+            task_id=self._current_task,
             grader_score=0.0,
             grader_feedback="Episode started. Fix the bugs!",
             done=False,
@@ -132,11 +165,11 @@ class DevOpsSandbox(Environment):
                 stdout="",
                 stderr="Empty command. Please provide a bash command.",
                 current_dir=self._current_dir,
-                task_id="devops_sandbox",
+                task_id=self._current_task,
                 grader_score=self._last_score,
                 grader_feedback="No command executed.",
                 done=False,
-                reward=self._last_score,
+                reward=0.0,
             )
 
         # Handle 'cd' commands manually since subprocess run is transient
@@ -159,6 +192,7 @@ class DevOpsSandbox(Environment):
                 
             # Run the grader anyway, even if just a cd
             score, feedback = self._grade()
+            reward = max(0.0, score - self._last_score)
             self._last_score = score
             episode_done = (score >= 1.0) or (self._state.step_count >= MAX_STEPS)
 
@@ -166,11 +200,11 @@ class DevOpsSandbox(Environment):
                 stdout=stdout,
                 stderr=stderr,
                 current_dir=self._current_dir,
-                task_id="devops_sandbox",
+                task_id=self._current_task,
                 grader_score=score,
                 grader_feedback=feedback,
                 done=episode_done,
-                reward=score,
+                reward=reward,
             )
 
         # Execute normal command
@@ -181,6 +215,7 @@ class DevOpsSandbox(Environment):
             stdout, stderr = "", f"Command execution error: {e}"
 
         score, feedback = self._grade()
+        reward = max(0.0, score - self._last_score)
         self._last_score = score
         episode_done = (score >= 1.0) or (self._state.step_count >= MAX_STEPS)
 
@@ -188,11 +223,11 @@ class DevOpsSandbox(Environment):
             stdout=stdout,
             stderr=stderr,
             current_dir=self._current_dir,
-            task_id="devops_sandbox",
+            task_id=self._current_task,
             grader_score=score,
             grader_feedback=feedback,
             done=episode_done,
-            reward=score,
+            reward=reward,
         )
 
     @property
@@ -390,5 +425,15 @@ class DevOpsSandbox(Environment):
             logger.exception("Grader error")
             feedback_parts.append(f"Grader error (score preserved): {exc}")
 
-        score = round(min(max(score, 0.0), 1.0), 2)
-        return (score, " | ".join(feedback_parts))
+        # Scale score based on task difficulty
+        if self._current_task == "easy":
+            raw_target = 0.45
+        elif self._current_task == "medium":
+            raw_target = 0.60
+        else:
+            raw_target = 1.0
+            
+        final_score = min(1.0, score / raw_target)
+        final_score = round(min(max(final_score, 0.0), 1.0), 2)
+        
+        return (final_score, " | ".join(feedback_parts))

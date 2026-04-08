@@ -100,86 +100,92 @@ def main():
 
     client = OpenAI(api_key=HF_TOKEN or "dummy_key", base_url=API_BASE_URL)
 
+    TASKS = ["easy", "medium", "hard"]
+
     # Note: openenv evaluation specifically needs exactly 3 things: [START], [STEP] logs, [END]
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for task_name in TASKS:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    with DevopsSandboxEnv(base_url=ENV_URL).sync() as env:
-        result = env.reset()
-        obs = result.observation
-        
-        print(f"[START] task={TASK_NAME} env={BENCHMARK} model={MODEL_NAME}", flush=True)
-
-        messages.append({
-            "role": "user",
-            "content": (
-                f"Here is the initial state of the broken app:\n\n"
-                f"```\n{obs.stdout}\n```\n\n"
-                f"Current directory: {obs.current_dir}\n"
-                f"Score: {obs.grader_score}/1.0\n\n"
-                f"What bash command should I run first?"
-            ),
-        })
-
-        rewards = []
-        is_done = False
-        steps_taken = 0
-        final_score = 0.0
-
-        for turn in range(1, MAX_TURNS + 1):
-            try:
-                response = client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=messages,
-                    temperature=0.2,
-                    max_tokens=256,
-                )
-                llm_text = response.choices[0].message.content or ""
-            except Exception as e:
-                err_msg = str(e).replace('"', "'")
-                # Need to emit an empty step on failure? Usually not, just end.
-                break
-
-            command = extract_command(llm_text)
-            if not command:
-                command = "ls -la /app"
-
-            error_msg = "null"
-            try:
-                result = env.step(BashAction(command=command))
+        try:
+            with DevopsSandboxEnv(base_url=ENV_URL).sync() as env:
+                result = env.reset(task_name=task_name)
                 obs = result.observation
-            except Exception as e:
-                obs = env.state  # Mock failed obs
-                error_msg = str(e).replace('\n', ' ')
+                
+                print(f"[START] task={task_name} env={BENCHMARK} model={MODEL_NAME}", flush=True)
 
-            steps_taken += 1
-            reward_val = obs.reward if hasattr(obs, 'reward') else getattr(obs, 'grader_score', 0.0)
-            rewards.append(f"{reward_val:.2f}")
-            is_done = result.done if hasattr(result, 'done') else getattr(obs, 'done', False)
-            done_str = "true" if is_done else "false"
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"Here is the initial state of the broken app:\n\n"
+                        f"```\n{obs.stdout}\n```\n\n"
+                        f"Current directory: {obs.current_dir}\n"
+                        f"Score: {obs.grader_score}/1.0\n\n"
+                        f"What bash command should I run first?"
+                    ),
+                })
 
-            action_str = command.replace('\n', ' ; ')
-            print(f"[STEP] step={steps_taken} action={action_str} reward={reward_val:.2f} done={done_str} error={error_msg}", flush=True)
+                rewards = []
+                is_done = False
+                steps_taken = 0
+                final_score = 0.0
 
-            messages.append({"role": "assistant", "content": llm_text})
-            messages.append({
-                "role": "user",
-                "content": (
-                    f"Command output:\n"
-                    f"stdout:\n```\n{getattr(obs, 'stdout', '')}\n```\n"
-                    f"stderr:\n```\n{getattr(obs, 'stderr', '')}\n```\n"
-                    f"Current score: {getattr(obs, 'grader_score', 0.0)}/1.0\n"
-                    f"Grader feedback: {getattr(obs, 'grader_feedback', '')}\n\n"
-                    f"What command should I run next?"
-                ),
-            })
+                for turn in range(1, MAX_TURNS + 1):
+                    try:
+                        response = client.chat.completions.create(
+                            model=MODEL_NAME,
+                            messages=messages,
+                            temperature=0.2,
+                            max_tokens=256,
+                        )
+                        llm_text = response.choices[0].message.content or ""
+                    except Exception as e:
+                        err_msg = str(e).replace('"', "'")
+                        break
 
-            final_score = getattr(obs, 'grader_score', 0.0)
-            if getattr(obs, 'grader_score', 0.0) >= 1.0 or getattr(obs, 'done', False) or result.done:
-                break
+                    command = extract_command(llm_text)
+                    if not command:
+                        command = "ls -la /app"
 
-        success_str = "true" if final_score >= 1.0 else "false"
-        rewards_str = ",".join(rewards) if rewards else "0.00"
-        print(f"[END] success={success_str} steps={steps_taken} score={final_score:.2f} rewards={rewards_str}", flush=True)
+                    error_msg = "null"
+                    try:
+                        result = env.step(BashAction(command=command))
+                        obs = result.observation
+                    except Exception as e:
+                        obs = env.state  # Mock failed obs
+                        error_msg = str(e).replace('\n', ' ')
+
+                    steps_taken += 1
+                    reward_val = obs.reward if hasattr(obs, 'reward') else getattr(obs, 'grader_score', 0.0)
+                    rewards.append(f"{reward_val:.2f}")
+                    is_done = result.done if hasattr(result, 'done') else getattr(obs, 'done', False)
+                    done_str = "true" if is_done else "false"
+
+                    action_str = command.replace('\n', ' ; ')
+                    print(f"[STEP] step={steps_taken} action={action_str} reward={reward_val:.2f} done={done_str} error={error_msg}", flush=True)
+
+                    messages.append({"role": "assistant", "content": llm_text})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"Command output:\n"
+                            f"stdout:\n```\n{getattr(obs, 'stdout', '')}\n```\n"
+                            f"stderr:\n```\n{getattr(obs, 'stderr', '')}\n```\n"
+                            f"Current score: {getattr(obs, 'grader_score', 0.0)}/1.0\n"
+                            f"Grader feedback: {getattr(obs, 'grader_feedback', '')}\n\n"
+                            f"What command should I run next?"
+                        ),
+                    })
+
+                    final_score = getattr(obs, 'grader_score', 0.0)
+                    if getattr(obs, 'grader_score', 0.0) >= 1.0 or getattr(obs, 'done', False) or (hasattr(result, 'done') and result.done):
+                        break
+
+                success_str = "true" if final_score >= 1.0 else "false"
+                rewards_str = ",".join(rewards) if rewards else "0.00"
+                print(f"[END] success={success_str} steps={steps_taken} score={final_score:.2f} rewards={rewards_str}", flush=True)
+        except Exception as e:
+             # Make sure to emit END log even on catastrophic wrapper failures so Hackathon doesn't crash inference.py
+             print(f"[END] success=false steps=0 score=0.00 rewards=0.00", flush=True)
 
 if __name__ == "__main__":
     main()
