@@ -127,7 +127,7 @@ def main():
                 rewards = []
                 is_done = False
                 steps_taken = 0
-                final_score = 0.0
+                final_score = getattr(obs, 'grader_score', 0.01)
 
                 for turn in range(1, MAX_TURNS + 1):
                     try:
@@ -155,7 +155,7 @@ def main():
                         error_msg = str(e).replace('\n', ' ')
 
                     steps_taken += 1
-                    reward_val = obs.reward if hasattr(obs, 'reward') else getattr(obs, 'grader_score', 0.0)
+                    reward_val = obs.reward if hasattr(obs, 'reward') else getattr(obs, 'grader_score', 0.01)
                     rewards.append(f"{reward_val:.2f}")
                     is_done = result.done if hasattr(result, 'done') else getattr(obs, 'done', False)
                     done_str = "true" if is_done else "false"
@@ -170,18 +170,20 @@ def main():
                             f"Command output:\n"
                             f"stdout:\n```\n{getattr(obs, 'stdout', '')}\n```\n"
                             f"stderr:\n```\n{getattr(obs, 'stderr', '')}\n```\n"
-                            f"Current score: {getattr(obs, 'grader_score', 0.0)}/1.0\n"
+                            f"Current score: {getattr(obs, 'grader_score', 0.01)}/1.0\n"
                             f"Grader feedback: {getattr(obs, 'grader_feedback', '')}\n\n"
                             f"What command should I run next?"
                         ),
                     })
 
-                    final_score = getattr(obs, 'grader_score', 0.0)
-                    if getattr(obs, 'grader_score', 0.0) >= 0.99 or getattr(obs, 'done', False) or (hasattr(result, 'done') and result.done):
+                    final_score = getattr(obs, 'grader_score', 0.01)
+                    if final_score >= 0.99 or getattr(obs, 'done', False) or (hasattr(result, 'done') and result.done):
                         break
 
+                # Clamp final score strictly within (0, 1)
+                final_score = max(0.01, min(0.99, final_score))
                 success_str = "true" if final_score >= 0.99 else "false"
-                rewards_str = ",".join(rewards) if rewards else "0.00"
+                rewards_str = ",".join(rewards) if rewards else "0.01"
                 print(f"[END] success={success_str} steps={steps_taken} score={final_score:.2f} rewards={rewards_str}", flush=True)
         except Exception as e:
              # Make sure to emit END log even on catastrophic wrapper failures so Hackathon doesn't crash inference.py
