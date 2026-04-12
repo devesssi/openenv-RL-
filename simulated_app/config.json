@@ -1,5 +1,10 @@
 {
   "port": 9999,
   "appName": "DevOps Sandbox App",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "logLevel": "info",
+  "rateLimit": {
+    "windowMs": 60000,
+    "maxRequests": 100
+  }
 }

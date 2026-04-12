@@ -1,36 +1,34 @@
 const express = require('express');
 const router = express.Router();
 
-// Simulates fetching data from a database
-function fetchDataFromDB() {
+// Simulates an async database query
+function fetchRecordsFromDB() {
   return new Promise((resolve) => {
     setTimeout(() => {
       resolve({
         records: [
-          { id: 1, value: 'sensor_alpha', reading: 42.5 },
-          { id: 2, value: 'sensor_beta', reading: 17.3 },
-          { id: 3, value: 'sensor_gamma', reading: 88.1 }
+          { id: 1, sensor: 'temperature', value: 42.5, unit: 'C', timestamp: new Date().toISOString() },
+          { id: 2, sensor: 'humidity', value: 67.3, unit: '%', timestamp: new Date().toISOString() },
+          { id: 3, sensor: 'pressure', value: 1013.25, unit: 'hPa', timestamp: new Date().toISOString() },
+          { id: 4, sensor: 'wind_speed', value: 12.8, unit: 'km/h', timestamp: new Date().toISOString() }
         ],
-        timestamp: new Date().toISOString()
+        total: 4,
+        page: 1
       });
     }, 100);
   });
 }
 
-// BUG 3 (Hard): The handler is marked async but does NOT await the Promise.
-// This means `result` will be a pending Promise object, not the resolved data.
-// Express will try to serialize the Promise, resulting in an empty/broken response
-// or a 500 error when the client expects valid JSON.
-
 router.get('/', async (req, res) => {
   try {
-    const result = fetchDataFromDB();
+    const result = fetchRecordsFromDB();
     if (!result || !result.records) {
-      return res.status(500).json({ error: 'Failed to fetch data' });
+      return res.status(500).json({ error: 'Database query returned empty result' });
     }
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: 'Internal server error' });
+    console.error(`[DATA] Error fetching records: ${err.message}`);
+    res.status(500).json({ error: 'Failed to fetch sensor data' });
   }
 });
 

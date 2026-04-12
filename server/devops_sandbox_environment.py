@@ -59,6 +59,13 @@ BUG_FILES = {
     "routes/data.js": "await",
 }
 
+# All interesting files in the app (bugs + red herrings)
+ALL_TRACKED_FILES = {
+    "config.json", "server.js", "routes/users.js", "routes/data.js",
+    "routes/status.js", "middleware/logger.js", "middleware/rateLimit.js",
+    ".env", "logs/error.log",
+}
+
 
 class DevOpsSandbox(Environment):
     """
@@ -132,9 +139,9 @@ class DevOpsSandbox(Environment):
         self._snapshot_file_hashes()
         self._inject_grader_script()
 
-        # Gather initial observation
+        # Gather initial observation — show full file tree
         init_stdout = self._exec_cmd(
-            f"ls -la {self._app_dir} && echo '---' && cat {os.path.join(self._app_dir, 'config.json')}"
+            f"find {self._app_dir} -type f | head -20 && echo '---' && cat {os.path.join(self._app_dir, 'package.json')}"
         )
 
         task_prompt = self._build_task_prompt(init_stdout)
@@ -240,50 +247,55 @@ class DevOpsSandbox(Environment):
     def _build_task_prompt(self, init_stdout: str) -> str:
         """Build the task prompt based on the current difficulty level."""
         base = (
-            "=== SELF-HEALING DEVOPS SANDBOX ===\n"
-            f"You have been dropped into a container with a broken Node.js "
-            f"Express backend in {self._app_dir}.\n\n"
+            "=== DEVOPS INCIDENT RESPONSE ===\n"
+            f"ALERT: Production Node.js service in {self._app_dir} is DOWN.\n"
+            "You are the on-call engineer. Diagnose and fix the issue(s).\n\n"
+            "The app is an Express.js backend with multiple routes, middleware,\n"
+            "config files, and logs. Not everything you see is broken — some files\n"
+            "are red herrings. Focus on what's actually causing failures.\n\n"
         )
 
         if self._current_task == "easy":
             mission = (
-                "YOUR MISSION [EASY — 1 bug]:\n"
-                "  Fix the port configuration so that:\n"
-                "  1. The app starts without errors on port 3000\n"
-                "  2. GET /health returns HTTP 200\n\n"
-                "HINTS:\n"
-                "  - Check config.json for wrong settings\n"
+                "SEVERITY: LOW (1 known issue)\n"
+                "SYMPTOM: App fails to bind to the expected port.\n"
+                "EXPECTED: App should listen on port 3000, GET /health returns 200.\n\n"
+                "Start by checking configuration and trying to start the app.\n"
             )
         elif self._current_task == "medium":
             mission = (
-                "YOUR MISSION [MEDIUM — 2 bugs]:\n"
-                "  Fix BOTH bugs so that:\n"
-                "  1. The app starts without errors on port 3000\n"
-                "  2. GET /health returns HTTP 200\n"
-                "  3. GET /api/users returns HTTP 200 with valid JSON\n\n"
-                "HINTS:\n"
-                "  - Check config.json for wrong settings\n"
-                "  - Look for syntax errors in routes/users.js\n"
+                "SEVERITY: MEDIUM (2 known issues)\n"
+                "SYMPTOMS:\n"
+                "  - App crashes immediately on startup\n"
+                "  - Even after fixing the crash, some routes may not work\n"
+                "EXPECTED:\n"
+                "  - App listens on port 3000\n"
+                "  - GET /health returns 200\n"
+                "  - GET /api/users returns 200 with valid JSON\n\n"
+                "Check startup logs carefully. The crash message will point you\n"
+                "to the first bug, but there may be a config issue too.\n"
             )
         else:
             mission = (
-                "YOUR MISSION [HARD — 3 bugs]:\n"
-                "  Fix ALL bugs so that:\n"
-                "  1. The app starts without errors on port 3000\n"
-                "  2. GET /health returns HTTP 200\n"
-                "  3. GET /api/users returns HTTP 200 with valid JSON\n"
-                "  4. GET /api/data returns HTTP 200 with valid JSON\n\n"
-                "HINTS:\n"
-                "  - Check config files for wrong settings\n"
-                "  - Look for syntax errors that prevent startup\n"
-                "  - Watch out for async/await issues\n"
+                "SEVERITY: HIGH (3 known issues)\n"
+                "SYMPTOMS:\n"
+                "  - App crashes on startup with an error\n"
+                "  - Multiple endpoints return errors or bad data\n"
+                "  - There are misleading old logs in logs/error.log\n"
+                "EXPECTED:\n"
+                "  - App listens on port 3000\n"
+                "  - GET /health returns 200\n"
+                "  - GET /api/users returns 200 with JSON containing 'users' array\n"
+                "  - GET /api/data returns 200 with JSON containing 'records' array\n\n"
+                "WARNING: The app has middleware, config files, .env, and old logs.\n"
+                "Not everything is broken — isolate the actual root causes.\n"
             )
 
         return (
             base + mission +
             "\nUse bash commands to explore, edit files, and test.\n"
-            "When you think you've fixed everything, run: npm start\n\n"
-            f"--- INITIAL DIRECTORY LISTING ---\n{init_stdout}\n"
+            "When you think you've fixed everything, run: cd /app && npm start\n\n"
+            f"--- INITIAL STATE ---\n{init_stdout}\n"
         )
 
     def _bugs_for_task(self) -> int:

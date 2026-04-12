@@ -1,18 +1,20 @@
 const express = require('express');
 const router = express.Router();
 
-// BUG 2 (Medium): There is a syntax error below.
-// The closing parenthesis for router.get() is missing,
-// which will cause Node.js to crash on startup with a SyntaxError.
-
 const users = [
-  { id: 1, name: 'Alice', email: 'alice@example.com' },
-  { id: 2, name: 'Bob', email: 'bob@example.com' },
-  { id: 3, name: 'Charlie', email: 'charlie@example.com' }
+  { id: 1, name: 'Alice', email: 'alice@example.com', role: 'admin' },
+  { id: 2, name: 'Bob', email: 'bob@example.com', role: 'user' },
+  { id: 3, name: 'Charlie', email: 'charlie@example.com', role: 'user' },
+  { id: 4, name: 'Diana', email: 'diana@example.com', role: 'moderator' }
 ];
 
 router.get('/', (req, res) => {
-  res.json({ users: users });
+  const role = req.query.role;
+  if (role) {
+    const filtered = users.filter(u => u.role === role);
+    return res.json({ users: filtered, count: filtered.length });
+  }
+  res.json({ users: users, count: users.length });
 };
 
 module.exports = router;

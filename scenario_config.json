@@ -7,24 +7,45 @@
     "temperature": 0.2,
     "max_tokens": 256,
     "max_steps_per_task": 8,
-    "system_prompt": "You are an expert DevOps engineer and Node.js developer. You have been dropped into a Linux container with a broken Express.js backend in /app. Your goal is to diagnose and fix bugs so the app runs correctly. Respond ONLY with a JSON object: {\"command\": \"<bash command>\"}. Use standard bash/Linux commands. Do NOT use interactive editors (vi, nano). Be methodical: read files first, understand the bug, then fix it.",
+    "system_prompt": "You are an expert DevOps engineer responding to a production incident. A Node.js Express backend is broken and you must diagnose and fix it using bash commands. The app directory is /app. It contains config files, route handlers, middleware, .env, and old logs. NOT everything is broken — focus on actual root causes, not red herrings. Respond ONLY with a JSON object: {\"command\": \"<bash command>\"}. Use sed, echo, cat, grep — never interactive editors.",
+    "app_structure": {
+        "files": [
+            "/app/config.json",
+            "/app/server.js",
+            "/app/package.json",
+            "/app/.env",
+            "/app/routes/users.js",
+            "/app/routes/data.js",
+            "/app/routes/status.js",
+            "/app/middleware/logger.js",
+            "/app/middleware/rateLimit.js",
+            "/app/logs/error.log"
+        ],
+        "bug_files": ["config.json", "routes/users.js", "routes/data.js"],
+        "red_herrings": [".env", "middleware/logger.js", "middleware/rateLimit.js", "routes/status.js", "logs/error.log"]
+    },
     "tasks": [
         {
             "task_name": "easy",
-            "description": "Fix the port configuration bug so the app starts on port 3000 and /health returns HTTP 200.",
-            "hints": ["Check config.json for wrong settings"],
-            "expected_bugs": ["config.json has port set to 9999 instead of 3000"],
+            "severity": "LOW",
+            "bugs_count": 1,
+            "description": "The app fails to bind to the expected port. Fix it so the app starts on port 3000 and GET /health returns 200.",
+            "bugs": [
+                {
+                    "file": "config.json",
+                    "type": "misconfiguration",
+                    "description": "Port is set to 9999 instead of 3000"
+                }
+            ],
             "verifiers": [
                 {
                     "name": "Config Port Fixed",
-                    "description": "Ensures config.json has port set to 3000",
                     "verification_type": "file_content",
                     "file_path": "/app/config.json",
                     "expected_content": "3000"
                 },
                 {
-                    "name": "Health Endpoint Responds",
-                    "description": "GET /health returns HTTP 200",
+                    "name": "Health Endpoint",
                     "verification_type": "http_check",
                     "endpoint": "/health",
                     "expected_status": 200
@@ -33,33 +54,36 @@
         },
         {
             "task_name": "medium",
-            "description": "Fix the port config AND the syntax error in routes/users.js so /api/users returns valid JSON.",
-            "hints": [
-                "Check config.json for wrong settings",
-                "Look for syntax errors in routes/users.js — missing closing parenthesis"
-            ],
-            "expected_bugs": [
-                "config.json has port set to 9999 instead of 3000",
-                "routes/users.js is missing a closing parenthesis on the router.get() call"
+            "severity": "MEDIUM",
+            "bugs_count": 2,
+            "description": "App crashes on startup. Fix the crash AND a config issue so all endpoints up to /api/users work.",
+            "bugs": [
+                {
+                    "file": "config.json",
+                    "type": "misconfiguration",
+                    "description": "Port is set to 9999 instead of 3000"
+                },
+                {
+                    "file": "routes/users.js",
+                    "type": "syntax_error",
+                    "description": "Missing closing parenthesis on router.get() call causes SyntaxError on import"
+                }
             ],
             "verifiers": [
                 {
                     "name": "Config Port Fixed",
-                    "description": "Ensures config.json has port set to 3000",
                     "verification_type": "file_content",
                     "file_path": "/app/config.json",
                     "expected_content": "3000"
                 },
                 {
                     "name": "Syntax Error Fixed",
-                    "description": "routes/users.js has closing parenthesis on router.get",
                     "verification_type": "file_content",
                     "file_path": "/app/routes/users.js",
                     "expected_content": "});"
                 },
                 {
-                    "name": "Users Endpoint Responds",
-                    "description": "GET /api/users returns HTTP 200 with users array",
+                    "name": "Users Endpoint",
                     "verification_type": "http_check",
                     "endpoint": "/api/users",
                     "expected_status": 200,
@@ -69,49 +93,67 @@
         },
         {
             "task_name": "hard",
-            "description": "Fix ALL three bugs: port config, syntax error, and missing await in the async data handler.",
-            "hints": [
-                "Check config.json for wrong settings",
-                "Look for syntax errors that prevent startup",
-                "Watch out for async/await issues in routes/data.js"
+            "severity": "HIGH",
+            "bugs_count": 3,
+            "description": "Multiple issues: app crashes, endpoints return errors. Misleading logs present. Fix ALL root causes.",
+            "bugs": [
+                {
+                    "file": "config.json",
+                    "type": "misconfiguration",
+                    "description": "Port is set to 9999 instead of 3000"
+                },
+                {
+                    "file": "routes/users.js",
+                    "type": "syntax_error",
+                    "description": "Missing closing parenthesis on router.get() call"
+                },
+                {
+                    "file": "routes/data.js",
+                    "type": "async_bug",
+                    "description": "Missing 'await' before fetchRecordsFromDB() — returns Promise instead of data"
+                }
             ],
-            "expected_bugs": [
-                "config.json has port set to 9999 instead of 3000",
-                "routes/users.js is missing a closing parenthesis on the router.get() call",
-                "routes/data.js is missing 'await' before fetchDataFromDB() causing a pending Promise"
+            "red_herrings": [
+                {
+                    "file": "logs/error.log",
+                    "description": "Old error log with misleading entries about port fallback and database connections"
+                },
+                {
+                    "file": ".env",
+                    "description": "Environment file with DB_HOST and CORS settings — not actually used by the app"
+                },
+                {
+                    "file": "middleware/rateLimit.js",
+                    "description": "Working rate limiter — might look suspicious but has generous limits"
+                }
             ],
             "verifiers": [
                 {
                     "name": "Config Port Fixed",
-                    "description": "Ensures config.json has port set to 3000",
                     "verification_type": "file_content",
                     "file_path": "/app/config.json",
                     "expected_content": "3000"
                 },
                 {
                     "name": "Syntax Error Fixed",
-                    "description": "routes/users.js has closing parenthesis",
                     "verification_type": "file_content",
                     "file_path": "/app/routes/users.js",
                     "expected_content": "});"
                 },
                 {
                     "name": "Await Added",
-                    "description": "routes/data.js uses await before fetchDataFromDB()",
                     "verification_type": "file_content",
                     "file_path": "/app/routes/data.js",
-                    "expected_content": "await fetchDataFromDB"
+                    "expected_content": "await fetchRecordsFromDB"
                 },
                 {
                     "name": "Health Endpoint",
-                    "description": "GET /health returns HTTP 200",
                     "verification_type": "http_check",
                     "endpoint": "/health",
                     "expected_status": 200
                 },
                 {
                     "name": "Users Endpoint",
-                    "description": "GET /api/users returns valid JSON with users",
                     "verification_type": "http_check",
                     "endpoint": "/api/users",
                     "expected_status": 200,
@@ -119,7 +161,6 @@
                 },
                 {
                     "name": "Data Endpoint",
-                    "description": "GET /api/data returns valid JSON with records",
                     "verification_type": "http_check",
                     "endpoint": "/api/data",
                     "expected_status": 200,
