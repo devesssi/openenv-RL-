@@ -1,0 +1,131 @@
+{
+    "env_name": "devops_sandbox",
+    "env_url": "http://localhost:8000",
+    "llm_provider": "openai",
+    "llm_model": "gpt-4o-mini",
+    "llm_api_key": "",
+    "temperature": 0.2,
+    "max_tokens": 256,
+    "max_steps_per_task": 8,
+    "system_prompt": "You are an expert DevOps engineer and Node.js developer. You have been dropped into a Linux container with a broken Express.js backend in /app. Your goal is to diagnose and fix bugs so the app runs correctly. Respond ONLY with a JSON object: {\"command\": \"<bash command>\"}. Use standard bash/Linux commands. Do NOT use interactive editors (vi, nano). Be methodical: read files first, understand the bug, then fix it.",
+    "tasks": [
+        {
+            "task_name": "easy",
+            "description": "Fix the port configuration bug so the app starts on port 3000 and /health returns HTTP 200.",
+            "hints": ["Check config.json for wrong settings"],
+            "expected_bugs": ["config.json has port set to 9999 instead of 3000"],
+            "verifiers": [
+                {
+                    "name": "Config Port Fixed",
+                    "description": "Ensures config.json has port set to 3000",
+                    "verification_type": "file_content",
+                    "file_path": "/app/config.json",
+                    "expected_content": "3000"
+                },
+                {
+                    "name": "Health Endpoint Responds",
+                    "description": "GET /health returns HTTP 200",
+                    "verification_type": "http_check",
+                    "endpoint": "/health",
+                    "expected_status": 200
+                }
+            ]
+        },
+        {
+            "task_name": "medium",
+            "description": "Fix the port config AND the syntax error in routes/users.js so /api/users returns valid JSON.",
+            "hints": [
+                "Check config.json for wrong settings",
+                "Look for syntax errors in routes/users.js — missing closing parenthesis"
+            ],
+            "expected_bugs": [
+                "config.json has port set to 9999 instead of 3000",
+                "routes/users.js is missing a closing parenthesis on the router.get() call"
+            ],
+            "verifiers": [
+                {
+                    "name": "Config Port Fixed",
+                    "description": "Ensures config.json has port set to 3000",
+                    "verification_type": "file_content",
+                    "file_path": "/app/config.json",
+                    "expected_content": "3000"
+                },
+                {
+                    "name": "Syntax Error Fixed",
+                    "description": "routes/users.js has closing parenthesis on router.get",
+                    "verification_type": "file_content",
+                    "file_path": "/app/routes/users.js",
+                    "expected_content": "});"
+                },
+                {
+                    "name": "Users Endpoint Responds",
+                    "description": "GET /api/users returns HTTP 200 with users array",
+                    "verification_type": "http_check",
+                    "endpoint": "/api/users",
+                    "expected_status": 200,
+                    "expected_body_contains": "\"users\""
+                }
+            ]
+        },
+        {
+            "task_name": "hard",
+            "description": "Fix ALL three bugs: port config, syntax error, and missing await in the async data handler.",
+            "hints": [
+                "Check config.json for wrong settings",
+                "Look for syntax errors that prevent startup",
+                "Watch out for async/await issues in routes/data.js"
+            ],
+            "expected_bugs": [
+                "config.json has port set to 9999 instead of 3000",
+                "routes/users.js is missing a closing parenthesis on the router.get() call",
+                "routes/data.js is missing 'await' before fetchDataFromDB() causing a pending Promise"
+            ],
+            "verifiers": [
+                {
+                    "name": "Config Port Fixed",
+                    "description": "Ensures config.json has port set to 3000",
+                    "verification_type": "file_content",
+                    "file_path": "/app/config.json",
+                    "expected_content": "3000"
+                },
+                {
+                    "name": "Syntax Error Fixed",
+                    "description": "routes/users.js has closing parenthesis",
+                    "verification_type": "file_content",
+                    "file_path": "/app/routes/users.js",
+                    "expected_content": "});"
+                },
+                {
+                    "name": "Await Added",
+                    "description": "routes/data.js uses await before fetchDataFromDB()",
+                    "verification_type": "file_content",
+                    "file_path": "/app/routes/data.js",
+                    "expected_content": "await fetchDataFromDB"
+                },
+                {
+                    "name": "Health Endpoint",
+                    "description": "GET /health returns HTTP 200",
+                    "verification_type": "http_check",
+                    "endpoint": "/health",
+                    "expected_status": 200
+                },
+                {
+                    "name": "Users Endpoint",
+                    "description": "GET /api/users returns valid JSON with users",
+                    "verification_type": "http_check",
+                    "endpoint": "/api/users",
+                    "expected_status": 200,
+                    "expected_body_contains": "\"users\""
+                },
+                {
+                    "name": "Data Endpoint",
+                    "description": "GET /api/data returns valid JSON with records",
+                    "verification_type": "http_check",
+                    "endpoint": "/api/data",
+                    "expected_status": 200,
+                    "expected_body_contains": "\"records\""
+                }
+            ]
+        }
+    ]
+}
